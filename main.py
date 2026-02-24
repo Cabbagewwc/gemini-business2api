@@ -1489,6 +1489,12 @@ async def admin_get_settings(request: Request):
             "scheduled_refresh_enabled": config.retry.scheduled_refresh_enabled,
             "scheduled_refresh_interval_minutes": config.retry.scheduled_refresh_interval_minutes
         },
+        "quota_limits": {
+            "enabled": config.quota_limits.enabled,
+            "text_daily_limit": config.quota_limits.text_daily_limit,
+            "images_daily_limit": config.quota_limits.images_daily_limit,
+            "videos_daily_limit": config.quota_limits.videos_daily_limit
+        },
         "public_display": {
             "logo_url": config.public_display.logo_url,
             "chat_url": config.public_display.chat_url
@@ -1559,6 +1565,14 @@ async def admin_update_settings(request: Request, new_settings: dict = Body(...)
         retry.setdefault("images_rate_limit_cooldown_seconds", config.retry.images_rate_limit_cooldown_seconds)
         retry.setdefault("videos_rate_limit_cooldown_seconds", config.retry.videos_rate_limit_cooldown_seconds)
         new_settings["retry"] = retry
+
+        # 配额上限配置
+        quota_limits = dict(new_settings.get("quota_limits") or {})
+        quota_limits.setdefault("enabled", config.quota_limits.enabled)
+        quota_limits.setdefault("text_daily_limit", config.quota_limits.text_daily_limit)
+        quota_limits.setdefault("images_daily_limit", config.quota_limits.images_daily_limit)
+        quota_limits.setdefault("videos_daily_limit", config.quota_limits.videos_daily_limit)
+        new_settings["quota_limits"] = quota_limits
 
         # 保存旧配置用于对比
         old_proxy_for_auth = PROXY_FOR_AUTH
@@ -2582,6 +2596,7 @@ async def stream_chat_generator(session: str, text_content: str, file_ids: List[
                                 request.state.first_response_time = first_response_time
                             # 第一次响应时统计成功次数
                             account_manager.conversation_count += 1
+                            account_manager.increment_daily_usage(get_request_quota_type(model_name))
                         # 正常内容使用 content 字段
                         full_content += text
                         chunk = create_chunk(chat_id, created_time, model_name, {"content": text}, None)
@@ -2601,6 +2616,9 @@ async def stream_chat_generator(session: str, text_content: str, file_ids: List[
                 quota_type = get_request_quota_type(model_name)
                 if quota_type in ("images", "videos"):
                     logger.info(f"[API] [{account_manager.config.account_id}] [req_{request_id}] 媒体生成请求，无文本内容属正常情况")
+                    # 媒体生成成功，计入每日配额
+                    account_manager.conversation_count += 1
+                    account_manager.increment_daily_usage(quota_type)
                 else:
                     logger.warning(f"[API] [{account_manager.config.account_id}] [req_{request_id}] ⚠️ 空响应警告: 收到{response_count}个响应但无文本内容，可能是思考模型未生成最终回答或上游错误")
                     # 打印第一个响应对象的完整结构用于调试
